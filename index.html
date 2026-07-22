@@ -442,14 +442,13 @@ async function restoreSnap(d){
   }catch(e){ toast('กู้ข้อมูลไม่สำเร็จ'); }
 }
 
-/* ---- คลาวด์ Supabase (โปรเจกต์เดียวกับแอปน้ำพริก) ---- */
-const CLOUD_KEY='kumsuk_cloud_v1';
-const CLOUD_ROW='kumsuk-books';
-const CLOUD_DEF={url:'https://rantcmxrseptqgfetlco.supabase.co', key:'sb_publishable_t0SV-lHiUKOkbcHe2Yqp2Q_dLsetGjh'};
-const CLOUD={url:CLOUD_DEF.url, key:CLOUD_DEF.key, email:'', refresh:'', access:'', expires:0, status:'off', lastSync:null, busy:false, err:''};
-function cloudSaveCfg(){ try{ localStorage.setItem(CLOUD_KEY,JSON.stringify({url:CLOUD.url,key:CLOUD.key,email:CLOUD.email,refresh:CLOUD.refresh})); }catch(e){} }
-function cloudLoadCfg(){ try{ const c=JSON.parse(localStorage.getItem(CLOUD_KEY)||'0');
-  if(c&&c.url){ CLOUD.url=c.url; CLOUD.key=c.key||CLOUD_DEF.key; CLOUD.email=c.email||''; CLOUD.refresh=c.refresh||''; } }catch(e){} }
+/* ---- คลาวด์ Supabase — ซิงก์อัตโนมัติแบบเดียวกับแอป kumsuk-app (ไม่ต้องล็อกอิน) ---- */
+const CLOUD_URL='https://onbxwivriovbllvaiqtn.supabase.co';
+const CLOUD_APIKEY='sb_publishable_GktUoQ-A1F4O0MM25IXBHg_fFBB4JYt';
+const CLOUD_TABLE='kumsuk_state';
+const CLOUD_ROW='kumsuk-books'; /* คนละแถวกับแอป Kumsuk Stock (id='kumsuk') ไม่ชนกัน */
+const CLOUD_CID=Math.random().toString(36).slice(2);
+const CLOUD={status:'connecting', lastSync:null, busy:false, err:''};
 function cloudErrMsg(e){
   const m=String((e&&e.message)||e);
   if(m.indexOf('Failed to fetch')>-1||m.indexOf('NetworkError')>-1||m.indexOf('Load failed')>-1)
@@ -458,34 +457,18 @@ function cloudErrMsg(e){
   if(m.indexOf('Email not confirmed')>-1) return 'อีเมลนี้ยังไม่ได้ยืนยัน';
   return m;
 }
-async function cloudAuth(body,type){
-  const res=await fetch(CLOUD.url+'/auth/v1/token?grant_type='+type,{method:'POST',
-    headers:{'apikey':CLOUD.key,'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  const d=await res.json().catch(()=>({}));
-  if(!res.ok) throw new Error(d.error_description||d.msg||d.error||('HTTP '+res.status));
-  CLOUD.access=d.access_token; if(d.refresh_token) CLOUD.refresh=d.refresh_token;
-  CLOUD.expires=Date.now()+(((+d.expires_in)||3600)-120)*1000;
-  return d;
-}
-async function cloudToken(){
-  if(CLOUD.access&&Date.now()<CLOUD.expires) return CLOUD.access;
-  if(!CLOUD.refresh) throw new Error('ยังไม่ได้เข้าสู่ระบบคลาวด์');
-  await cloudAuth({refresh_token:CLOUD.refresh},'refresh_token');
-  cloudSaveCfg();
-  return CLOUD.access;
-}
 async function cloudReq(path,opt){
-  const tk=await cloudToken();
   opt=opt||{};
-  opt.headers=Object.assign({'apikey':CLOUD.key,'Authorization':'Bearer '+tk,'Content-Type':'application/json'},opt.headers||{});
-  const res=await fetch(CLOUD.url+path,opt);
-  if(!res.ok){ const t=await res.text().catch(()=>''); throw new Error('HTTP '+res.status+' '+t.slice(0,140)); }
-  return res.status===204?null:res.json();
+  opt.headers=Object.assign({'apikey':CLOUD_APIKEY,'Authorization':'Bearer '+CLOUD_APIKEY,'Content-Type':'application/json'},opt.headers||{});
+  const res=await fetch(CLOUD_URL+path,opt);
+  const t=await res.text().catch(()=>'');
+  if(!res.ok) throw new Error('HTTP '+res.status+' '+t.slice(0,140));
+  return t?JSON.parse(t):null;
 }
 async function cloudPushNow(){
-  await cloudReq('/rest/v1/records',{method:'POST',
+  await cloudReq('/rest/v1/'+CLOUD_TABLE,{method:'POST',
     headers:{'Prefer':'resolution=merge-duplicates'},
-    body:JSON.stringify([{id:CLOUD_ROW,collection:CLOUD_ROW,data:S,updated_at:new Date().toISOString()}])});
+    body:JSON.stringify([{id:CLOUD_ROW,data:S,updated_by:CLOUD_CID,updated_at:new Date().toISOString()}])});
   CLOUD.lastSync=new Date();
 }
 async function cloudPull(auto){
@@ -493,7 +476,7 @@ async function cloudPull(auto){
   if(auto&&document.querySelector('.overlay')) return; /* อย่าซิงก์ระหว่างกรอกฟอร์ม */
   CLOUD.busy=true;
   try{
-    const rows=await cloudReq('/rest/v1/records?id=eq.'+CLOUD_ROW+'&select=data');
+    const rows=await cloudReq('/rest/v1/'+CLOUD_TABLE+'?id=eq.'+CLOUD_ROW+'&select=data');
     const d=rows&&rows[0]&&rows[0].data;
     const cloudT=(d&&d.savedAt)||'', localT=S.savedAt||'';
     if(d&&typeof d==='object'&&('tx' in d)&&cloudT>localT){
@@ -509,7 +492,7 @@ async function cloudPull(auto){
       render();
     }
   }catch(e){
-    CLOUD.status=CLOUD.refresh?'err':'off'; CLOUD.err=cloudErrMsg(e);
+    CLOUD.status='err'; CLOUD.err=cloudErrMsg(e);
     if(!auto) toast('ซิงก์คลาวด์ไม่สำเร็จ');
     if(ui.view==='set') render();
   }
@@ -517,43 +500,12 @@ async function cloudPull(auto){
 }
 let cloudTimer=0;
 function scheduleCloudPush(){
-  if(CLOUD.status!=='on') return;
   clearTimeout(cloudTimer);
-  cloudTimer=setTimeout(()=>{ cloudPushNow().catch(e=>{ CLOUD.status='err'; CLOUD.err=cloudErrMsg(e); }); },1200);
+  cloudTimer=setTimeout(()=>{ cloudPushNow().then(()=>{ CLOUD.status='on'; CLOUD.err=''; }).catch(e=>{ CLOUD.status='err'; CLOUD.err=cloudErrMsg(e); }); },1200);
 }
-async function cloudLogin(e){
-  e.preventDefault(); const f=e.target;
-  CLOUD.url=(f.curl.value.trim()||CLOUD_DEF.url).replace(/\/+$/,'');
-  CLOUD.key=f.ckey.value.trim()||CLOUD_DEF.key;
-  const email=f.cemail.value.trim(), pw=f.cpass.value;
-  const btn=f.querySelector('button.btn'); if(btn){ btn.disabled=true; btn.textContent='กำลังเชื่อมต่อ...'; }
-  try{
-    await cloudAuth({email:email,password:pw},'password');
-    CLOUD.email=email; CLOUD.status='on'; CLOUD.err='';
-    cloudSaveCfg();
-    toast('เชื่อมคลาวด์แล้ว ✓');
-    await cloudPull(true);
-    render();
-  }catch(err){
-    CLOUD.err=cloudErrMsg(err); CLOUD.status='off';
-    toast('เข้าสู่ระบบคลาวด์ไม่สำเร็จ'); render();
-  }
-  return false;
-}
-function cloudLogout(){
-  if(!confirm('เลิกเชื่อมคลาวด์ในเครื่องนี้? (ข้อมูลบนคลาวด์และในเครื่องยังอยู่ครบ)')) return;
-  CLOUD.access=''; CLOUD.refresh=''; CLOUD.status='off'; CLOUD.err='';
-  cloudSaveCfg(); toast('เลิกเชื่อมคลาวด์แล้ว'); render();
-}
-async function initCloud(){
-  cloudLoadCfg();
-  if(!CLOUD.refresh) return;
-  try{ await cloudToken(); await cloudPull(true); }
-  catch(e){ CLOUD.status='err'; CLOUD.err=cloudErrMsg(e); if(ui.view==='set') render(); }
-}
+async function initCloud(){ await cloudPull(true); }
 let lastCloudFocus=0;
 function onFocusCloud(){
-  if(CLOUD.status!=='on') return;
   const n=Date.now(); if(n-lastCloudFocus<8000) return; lastCloudFocus=n;
   cloudPull(true);
 }
@@ -2048,22 +2000,16 @@ function renderSet(){
         +'<button class="btn" onclick="App.linkSyncFile()">🔗 เชื่อมไฟล์ซิงก์</button>')
     :'<p style="font-size:13.5px;color:var(--ink-2);margin:4px 0 0">เบราว์เซอร์นี้ (เช่น Safari) ยังไม่รองรับการซิงก์อัตโนมัติ — แนะนำให้เปิดแอปด้วย <b>Google Chrome</b> ทั้งสองเครื่อง หรือใช้ปุ่ม "ส่งออก/นำเข้า" ด้านล่างแทน (ส่งออกจากเครื่องหนึ่ง เก็บไฟล์ไว้ใน iCloud แล้วนำเข้าที่อีกเครื่อง)</p>')
   +'</div>'
-  +'<div class="card"><h3>☁️ คลาวด์ (Supabase)</h3>'
+  +'<div class="card"><h3>☁️ คลาวด์ (ซิงก์อัตโนมัติ)</h3>'
   +(CLOUD.status==='on'
-    ?'<p style="font-size:13.5px;color:var(--ink-2);margin:4px 0 10px">สถานะ: <span class="badge good">เชื่อมต่อแล้ว</span> · '+esc(CLOUD.email)
+    ?'<p style="font-size:13.5px;color:var(--ink-2);margin:4px 0 10px">สถานะ: <span class="badge good">เชื่อมต่อแล้ว</span>'
       +(CLOUD.lastSync?' · ซิงก์ล่าสุด '+CLOUD.lastSync.toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'})+' น.':'')
-      +'<br>ข้อมูลถูกส่งขึ้นคลาวด์อัตโนมัติทุกครั้งที่บันทึก และดึงข้อมูลล่าสุดให้เมื่อเปิดแอป — เปิดจากเครื่องไหนก็ได้ ข้อมูลตรงกัน</p>'
-      +'<div class="row"><button class="btn ghost" onclick="App.cloudPull()">ซิงก์ตอนนี้</button>'
-      +'<button class="btn danger" onclick="App.cloudLogout()">เลิกเชื่อมคลาวด์</button></div>'
-    :'<p style="font-size:13.5px;color:var(--ink-2);margin:4px 0 10px">เก็บสำเนาข้อมูลไว้บนคลาวด์ (โปรเจกต์เดียวกับแอปน้ำพริก) — เปิดจากเครื่องไหนก็ได้ ข้อมูลตรงกันเสมอ<br>ใช้<b>อีเมล + รหัสผ่านชุดเดียวกับที่ล็อกอินแอปน้ำพริก</b>ได้เลย — <b>ใส่ครั้งแรกครั้งเดียวต่อเครื่อง</b> หลังจากนั้นแอปซิงก์อัตโนมัติตลอด ไม่ถามอีก</p>'
-      +(CLOUD.err?'<p style="font-size:13px;color:var(--bad);background:var(--bad-soft);border-radius:10px;padding:8px 12px">⚠️ '+esc(CLOUD.err)+'</p>':'')
-      +'<form onsubmit="return App.cloudLogin(event)">'
-      +'<label>อีเมล</label><input name="cemail" type="email" required value="'+esc(CLOUD.email)+'" placeholder="you@example.com">'
-      +'<label>รหัสผ่าน</label><input name="cpass" type="password" required>'
-      +'<details style="margin-top:10px"><summary style="font-size:12.5px;color:var(--ink-3);cursor:pointer">ตั้งค่าขั้นสูง (Project URL / key)</summary>'
-      +'<label>Project URL</label><input name="curl" value="'+esc(CLOUD.url)+'">'
-      +'<label>publishable / anon key</label><input name="ckey" value="'+esc(CLOUD.key)+'"></details>'
-      +'<button class="btn" style="margin-top:14px">☁️ เชื่อมต่อคลาวด์</button></form>')
+      +'<br>ไม่ต้องล็อกอินคลาวด์ — บันทึกปุ๊บส่งขึ้นคลาวด์ทันที เปิดแอปจากเครื่องไหนก็เห็นข้อมูลชุดเดียวกัน (แบบเดียวกับแอป Kumsuk Stock)</p>'
+    :CLOUD.status==='err'
+    ?'<p style="font-size:13.5px;color:var(--ink-2);margin:4px 0 10px">สถานะ: <span class="badge bad">ต่อไม่ได้</span></p>'
+      +'<p style="font-size:13px;color:var(--bad);background:var(--bad-soft);border-radius:10px;padding:8px 12px">⚠️ '+esc(CLOUD.err)+'</p>'
+    :'<p style="font-size:13.5px;color:var(--ink-2);margin:4px 0 10px">สถานะ: <span class="badge warn">กำลังเชื่อมต่อ...</span></p>')
+  +'<div class="row"><button class="btn ghost" onclick="App.cloudPull()">ซิงก์ตอนนี้</button></div>'
   +'</div>'
   +'<div class="card"><h3>🕘 สำรองข้อมูลอัตโนมัติ</h3>'
   +'<p style="font-size:13.5px;color:var(--ink-2);margin:4px 0 10px">แอปเก็บสำเนาข้อมูลให้เอง<b>วันละครั้ง</b> (ย้อนหลัง 7 ชุดล่าสุด) ถ้าเผลอลบหรือบันทึกผิด กด "กู้คืน" กลับไปวันนั้นได้เลย — และถ้าเชื่อมไฟล์ซิงก์ iCloud ไว้ด้านบน ข้อมูลจะมีสำเนาอยู่บนคลาวด์อีกชั้นหนึ่ง</p>'
@@ -2242,7 +2188,7 @@ window.App={go,goTab,pickMode,loginSubmit,setupSubmit,logout,permAll,userForm,sa
   claimForm,saveClaim,viewClaim,viewAtt,setClaimStatus,payClaimForm,confirmPayClaim,delClaim,printClaim,setClStatus,clAddFiles,clRmAtt,
   acctForm,saveAcct,delAcct,
   saveSet,exportData,importData,wipe,loadSample,theme,
-  linkSyncFile,connectSync,syncNow,unlinkSync,restoreSnap,cloudLogin,cloudLogout,cloudPull,
+  linkSyncFile,connectSync,syncNow,unlinkSync,restoreSnap,cloudPull,
   closeModal,tip,hideTip};
 window.addEventListener('focus',onFocusSync);
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden) onFocusSync(); });
