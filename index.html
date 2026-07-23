@@ -501,9 +501,14 @@ async function cloudPull(auto){
 let cloudTimer=0;
 function scheduleCloudPush(){
   clearTimeout(cloudTimer);
-  cloudTimer=setTimeout(()=>{ cloudPushNow().then(()=>{ CLOUD.status='on'; CLOUD.err=''; }).catch(e=>{ CLOUD.status='err'; CLOUD.err=cloudErrMsg(e); }); },1200);
+  cloudTimer=setTimeout(()=>{ cloudTimer=0;
+    cloudPushNow().then(()=>{ CLOUD.status='on'; CLOUD.err=''; }).catch(e=>{ CLOUD.status='err'; CLOUD.err=cloudErrMsg(e); }); },1200);
 }
-async function initCloud(){ await cloudPull(true); }
+async function initCloud(){
+  await cloudPull(true);
+  /* ดึงข้อมูลล่าสุดเป็นระยะระหว่างเปิดแอป — ใช้หลายเครื่องพร้อมกันได้ทันกันมากขึ้น */
+  setInterval(()=>{ if(!document.hidden&&!cloudTimer) cloudPull(true); },45000);
+}
 let lastCloudFocus=0;
 function onFocusCloud(){
   const n=Date.now(); if(n-lastCloudFocus<8000) return; lastCloudFocus=n;
